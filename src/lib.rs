@@ -28,6 +28,30 @@ impl SimpleTaskApp {
         }
     }
 
+    pub fn gen_task_id() -> String {
+        uuid::Uuid::new_v4().to_string()
+    }
+
+    pub async fn send_task(&self, handler_name: &str, input: Value) -> anyhow::Result<()> {
+        let mut conn = self.redis_client.get_async_connection().await?;
+
+        let task_id = Self::gen_task_id();
+        let task_id_key = join_key!(TASK_TABLE, &task_id);
+        let task_id_key = task_id_key.as_str();
+
+        conn.hset_multiple(
+            task_id_key,
+            &[
+                ("handler_name", handler_name),
+                ("input", &input.to_string()),
+                ("status", TaskStatus::Waiting.as_str()),
+            ],
+        )
+        .await?;
+        conn.lpush(WAITING_TASK_ID_QUEUE, task_id).await?;
+        Ok(())
+    }
+
     pub async fn run_task(
         task_id: &str,
         handler: Arc<Handler>,
@@ -137,6 +161,13 @@ macro_rules! register_handler {
             $crate::utils::lang::type_name_of($b),
             std::sync::Arc::new(|input| Box::pin($b(input))),
         )
+    };
+}
+
+#[macro_export]
+macro_rules! send_task {
+    ($app:expr, $f:expr, $value:expr) => {
+        $app.send_task($crate::utils::lang::type_name_of($f), $value)
     };
 }
 

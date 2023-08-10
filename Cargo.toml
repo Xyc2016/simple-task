@@ -12,3 +12,4 @@ redis = { version = "0.23.1", features = ["tokio-comp"] }
 serde = "1.0.183"
 serde_json = "1.0.104"
 tokio = { version = "1.29.1", features = ["full"] }
+uuid = { version = "1.4.1", features = ["v4"] }
