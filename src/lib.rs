@@ -10,7 +10,7 @@ use serde_json::Value;
 pub mod contants;
 use handler::{Handler, HandlerFn, HandlerMap};
 pub mod handler;
-use log::info;
+use log::{info, error};
 use redis::AsyncCommands;
 
 pub mod task;
@@ -83,7 +83,7 @@ impl SimpleTaskApp {
     pub async fn run_task(
         self: Arc<Self>,
         task_id: &str,
-        handler: Arc<Handler>,
+        handler: &Arc<Handler>,
         input: Value,
     ) -> anyhow::Result<()> {
         let mut redis_conn = self.redis_client.get_async_connection().await?;
@@ -106,6 +106,7 @@ impl SimpleTaskApp {
                 redis_conn.expire(task_id_key, 3600).await?;
             }
             Err(e) => {
+                error!("Task {} failed, handler {}, error {}", &task_id, &handler.name, e);
                 redis_conn
                     .hset_multiple(
                         task_id_key,
@@ -198,7 +199,9 @@ impl SimpleTaskApp {
             let task_id = task_id.clone();
             let _self = _self.clone();
             tokio::spawn(async move {
-                _self.run_task(&task_id, handler, input).await.unwrap();
+                if let Err(e) = _self.run_task(&task_id, &handler, input).await {
+                    error!("Internal error when running task {}, handler {}, error {}", &task_id, handler_name, e);
+                }
             });
         }
         Ok(())
