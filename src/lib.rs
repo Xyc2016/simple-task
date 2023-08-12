@@ -10,7 +10,9 @@ use serde_json::Value;
 pub mod contants;
 use handler::{Handler, HandlerFn, HandlerMap};
 pub mod handler;
+use log::info;
 use redis::AsyncCommands;
+
 pub mod task;
 
 #[derive(Debug)]
@@ -127,7 +129,22 @@ impl SimpleTaskApp {
         self.tasks.insert(name, Arc::new(task));
     }
 
+    pub fn log_for_start(&self) {
+        info!("Running simple task app...");
+        let m = &self.tasks;
+        info!("Registered handlers:");
+        for (name, _) in m.iter() {
+            info!("  {}", name);
+        }
+        let conn_info = self.redis_client.get_connection_info();
+        info!("Broker & result backend: redis://{}/{}", conn_info.addr, conn_info.redis.db);
+
+        info!("Press CTRL+C to quit");
+    }
+
     pub async fn run(self) -> anyhow::Result<()> {
+        self.log_for_start();
+
         let _self = Arc::new(self);
         _self.wait_shutdown_background();
         let mut conn = _self.redis_client.get_async_connection().await?;
