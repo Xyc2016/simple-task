@@ -1,5 +1,9 @@
 pub mod utils;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{atomic::AtomicBool, Arc},
+};
+
 
 use contants::task::TaskStatus;
 use redis::{self};
@@ -53,11 +57,12 @@ impl SimpleTaskApp {
     }
 
     pub async fn run_task(
+        self: Arc<Self>,
         task_id: &str,
         handler: Arc<Handler>,
         input: Value,
-        mut redis_conn: redis::aio::Connection,
     ) -> anyhow::Result<()> {
+        let mut redis_conn = self.redis_client.get_async_connection().await?;
         let f = &handler.func;
         let task_id_key = join_key!(TASK_TABLE, task_id);
         match f(input).await {
@@ -71,7 +76,9 @@ impl SimpleTaskApp {
                         ],
                     )
                     .await?;
-                redis_conn.lrem(PROCESSING_TASK_ID_QUEUE, 1, task_id).await?;
+                redis_conn
+                    .lrem(PROCESSING_TASK_ID_QUEUE, 1, task_id)
+                    .await?;
                 redis_conn.expire(task_id_key, 3600).await?;
             }
             Err(e) => {
@@ -98,8 +105,9 @@ impl SimpleTaskApp {
         self.tasks.insert(name, Arc::new(task));
     }
 
-    pub async fn run(&self) -> anyhow::Result<()> {
-        let mut conn = self.redis_client.get_async_connection().await?;
+    pub async fn run(self) -> anyhow::Result<()> {
+        let _self = Arc::new(self);
+        let mut conn = _self.redis_client.get_async_connection().await?;
 
         loop {
             let task_id: Option<String> = conn
@@ -138,19 +146,18 @@ impl SimpleTaskApp {
             };
 
             let input: Value = serde_json::from_str(&input)?;
-            let handler = self
+            let handler = _self
                 .tasks
                 .get(&handler_name)
                 .ok_or(anyhow::anyhow!("Handler {} not found", handler_name))?
                 .clone();
-            let conn = self.redis_client.get_async_connection().await?;
             let task_id = task_id.clone();
+            let _self = _self.clone();
             tokio::spawn(async move {
-                Self::run_task(&task_id, handler, input, conn)
-                    .await
-                    .unwrap();
+                _self.run_task(&task_id, handler, input).await.unwrap();
             });
         }
+        Ok(())
     }
 }
 
