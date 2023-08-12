@@ -4,7 +4,6 @@ use std::{
     sync::{atomic::AtomicBool, Arc},
 };
 
-
 use contants::task::TaskStatus;
 use redis::{self};
 use serde_json::Value;
@@ -18,6 +17,7 @@ pub mod task;
 pub struct SimpleTaskApp {
     pub tasks: HandlerMap,
     redis_client: redis::Client,
+    should_stop: AtomicBool,
 }
 
 const WAITING_TASK_ID_QUEUE: &str = "simple_task:waiting_task_id";
@@ -29,11 +29,33 @@ impl SimpleTaskApp {
         Self {
             tasks: HandlerMap::new(),
             redis_client,
+            should_stop: AtomicBool::new(false),
         }
     }
 
     pub fn gen_task_id() -> String {
         uuid::Uuid::new_v4().to_string()
+    }
+
+    pub fn prepare_stop(&self) {
+        self.should_stop
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn should_stop(&self) -> bool {
+        self.should_stop.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn wait_shutdown_background(self: &Arc<Self>) {
+        let _self = self.clone();
+        tokio::spawn(async move {
+            match tokio::signal::ctrl_c().await {
+                Ok(_) => {
+                    _self.prepare_stop();
+                }
+                Err(e) => {}
+            };
+        });
     }
 
     pub async fn send_task(&self, handler_name: &str, input: Value) -> anyhow::Result<()> {
@@ -107,9 +129,14 @@ impl SimpleTaskApp {
 
     pub async fn run(self) -> anyhow::Result<()> {
         let _self = Arc::new(self);
+        _self.wait_shutdown_background();
         let mut conn = _self.redis_client.get_async_connection().await?;
 
         loop {
+            if _self.should_stop() {
+                break;
+            }
+
             let task_id: Option<String> = conn
                 .blmove(
                     WAITING_TASK_ID_QUEUE,
